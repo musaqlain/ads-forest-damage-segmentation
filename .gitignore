@@ -1,0 +1,39 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Training outputs (generated, not source code)
+outputs/
+exploration/
+
+# Large data files
+data/
+*.pkl
+
+# Research PDFs
+*.pdf
+*.png
+*.md
+
+# CNN alignment layer (experimental, incomplete — planned for GSoC research)
+models/
+training/
+
+# Diagnostic/experimental scripts (not part of core pipeline)
+diagnose_signal.py
+visualize_pkl.py
+analyze_samples.py
+test_pipeline.py
+patch_missing_nir.py
+(delete) diagnose_deepforest.py
+(delete) fix_deepforest_masks.py
+
+# Config with CNN training params (internal)
+config.py
+
+# Environment / IDE
+.env
+.venv
+*.egg-info/
