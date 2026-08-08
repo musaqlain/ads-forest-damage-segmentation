@@ -654,6 +654,16 @@ def run_cv(use_prior, rep=0):
               f"(threshold {thr:.2f}, {len(val_idx)} test tiles)")
     print(f"  [{'w/ soft-prior' if use_prior else 'no prior'}] epochs kept per fold: {ep_choices} "
           f"(all >= {int(BEST_EP_MIN_FRAC*FT_EPOCHS)} by construction)")
+    # FT_EPOCHS is a budget, not a setting: the epoch that ships is chosen on inner-val, so extra
+    # epochs only help if the choice is pressed against the ceiling. Say so explicitly rather than
+    # leaving it to be eyeballed — this is the whole evidence for "should we train longer?".
+    _at_ceiling = sum(1 for e in ep_choices if e >= FT_EPOCHS - 1)
+    if _at_ceiling >= max(2, len(ep_choices) // 2):
+        print(f"      !! {_at_ceiling}/{len(ep_choices)} folds chose epoch >= {FT_EPOCHS-1}: inner-val was "
+              f"still improving when the budget ran out. FT_EPOCHS={FT_EPOCHS} is TRUNCATING — raise it.")
+    else:
+        print(f"      epoch budget OK: only {_at_ceiling}/{len(ep_choices)} fold(s) near the "
+              f"{FT_EPOCHS}-epoch ceiling, so more epochs would not change the result.")
     print(f"  [{'w/ soft-prior' if use_prior else 'no prior'}] thresholds chosen per fold: {thr_choices}"
           + ("  (all 0.50 = tuning disabled)" if not TUNE_THRESHOLD else ""))
     # FOLD HEALTH. The headline is a TILE-weighted mean, so a large fold that trains badly moves it a
@@ -1005,6 +1015,31 @@ if len(_degen):
     print(f"  recall excluding those tiles: {np.nanmean(recall[_clean]):.3f} "
           f"(vs {np.nanmean(recall):.3f} including them) — the more conservative number to report.")
 
+# --- Does label coverage predict performance? -------------------------------------------------
+# A crop qualifies as "damage" at MIN_LABEL_PX=64, i.e. 0.04% of its pixels. The tempting move is to
+# raise that floor and drop the thinly-labelled crops. That WOULD lift the reported IoU — but by
+# deleting the hard cases, not by fixing them, which is score inflation and a reviewer will say so.
+# So measure it instead of acting on it. The last column is the number you would report after
+# deleting everything below each bin; if it climbs steeply, the "improvement" is pure selection.
+_cov = np.array([float(X[i][1].astype(bool).mean()) for i in range(len(X))])
+_cov_scored = ~np.isnan(_hd_iou)
+if _cov_scored.sum():
+    print("\n--- IoU vs LABEL COVERAGE (how much of the crop your annotation marks as damage) ---")
+    print(f"  {'label % of crop':<16} {'n':>5} {'IoU':>7} {'recall':>8} {'silent':>8}   "
+          f"{'IoU if bins below were DROPPED':>30}")
+    _edges = [0.0, 0.005, 0.01, 0.02, 0.05, 0.10, 0.25, 1.01]
+    for _lo, _hi in zip(_edges[:-1], _edges[1:]):
+        _sel = _cov_scored & (_cov >= _lo) & (_cov < _hi)
+        if not _sel.sum():
+            continue
+        _cum = _cov_scored & (_cov >= _lo)
+        print(f"  {f'{_lo*100:.1f} - {_hi*100:.1f}':<16} {int(_sel.sum()):>5} "
+              f"{np.nanmean(_hd_iou[_sel]):7.3f} {np.nanmean(recall[_sel]):8.3f} "
+              f"{100*_is_silent[_sel].mean():7.1f}%   {np.nanmean(_hd_iou[_cum]):>30.3f}")
+    print("  READ: a flat IoU column means the label floor is NOT what limits the score, and raising\n"
+          "  it would only inflate the number. A rising one means thin labels are genuinely noisy\n"
+          "  supervision — which is an argument for dropping them from TRAINING, never from scoring.")
+
 L = [f"# 30cm fine-tune report — {datetime.now():%Y-%m-%d %H:%M}",
      f"- labeled tiles: {len(ids)} | size {SIZE} | {N_FOLDS}-fold CV | {FT_EPOCHS} epochs/fold",
      f"- avg damage coverage: {pos_frac*100:.1f}% | no-damage tiles excluded from IoU mean: {n_nodmg}/{len(ids)}",
@@ -1224,7 +1259,7 @@ else:
 # PAGES instead, and lead with the three selections that are actually worth looking at.
 SAVE_ALL_TILES = True
 SHEET_COLS, SHEET_ROWS = 6, 6          # 36 per page, readable at 100%
-SHEET_MODE = "extremes"                # "extremes" = best/worst/failures only; "all" = every page
+SHEET_MODE = "all"                     # "all" = every crop, ~53 pages; "extremes" = best/worst only
 
 if SAVE_ALL_TILES:
     hd_iou, _, hd_pred = results[HEAD]
@@ -1245,7 +1280,10 @@ if SAVE_ALL_TILES:
             ax.imshow(X[i][0][..., :3])
             ov = np.zeros((SIZE, SIZE, 4)); ov[pr] = [0, .4, 1, .5]; ax.imshow(ov)
             ax.contour(X[i][1] > .5, [.5], colors=["lime"], linewidths=.9)
-            ax.set_title(f"{ids[i]}  IoU {hd_iou[i]:.2f}", fontsize=8)
+            # A confirmed-healthy crop has no IoU (nothing to intersect). Label it by how much of the
+            # crop the model wrongly painted, which is the only number that means anything there.
+            ax.set_title(f"{ids[i]}  IoU {hd_iou[i]:.2f}" if not np.isnan(hd_iou[i])
+                         else f"{ids[i]}  healthy — {100*pr.mean():.1f}% painted", fontsize=8)
         fig.suptitle(title + "   (lime = your label, blue = model)", fontweight="bold")
         fig.tight_layout()
         fig.savefig(OUT / fname, dpi=100, bbox_inches="tight")
@@ -1263,6 +1301,21 @@ if SAVE_ALL_TILES:
     _flood = sorted(_degen, key=lambda i: (TILE_SOURCE.get(ids[i], ids[i]), -hd_iou[i]))[:per_page]
     _sheet(_flood, "sheet_paint_everything.png",
            f"PAINT-EVERYTHING failures ({len(_degen)} total, showing {len(_flood)}), grouped by source tile")
+
+    # The confirmed-NEGATIVE crops have never been drawn, only summarised as a commission %. They are
+    # where the false alarms live, and a false alarm on ground verified healthy is the one error with
+    # no "the label was incomplete" excuse. Worst first = largest predicted area on a clean crop.
+    _neg = [i for i in range(len(X)) if np.isnan(hd_iou[i])]
+    if _neg:
+        _neg_area = {i: float(((hd_pred[i] > thr_of(i)) & valid_mask(i)).mean()) for i in _neg}
+        _neg_sorted = sorted(_neg, key=lambda i: -_neg_area[i])
+        _n_fired = sum(1 for i in _neg if _neg_area[i] > 0)
+        _sheet(_neg_sorted[:per_page], "sheet_negatives_worst.png",
+               f"FALSE ALARMS on confirmed-healthy crops ({_n_fired} of {len(_neg)} fired), worst first")
+        if SHEET_MODE == "all":
+            for p in range(int(np.ceil(len(_neg) / per_page))):
+                _sheet(_neg_sorted[p * per_page:(p + 1) * per_page], f"sheet_neg_page{p+1:02d}.png",
+                       f"Confirmed-healthy crops, most->least predicted — page {p+1}")
 
     if SHEET_MODE == "all":
         for p in range(int(np.ceil(len(dmg) / per_page))):
