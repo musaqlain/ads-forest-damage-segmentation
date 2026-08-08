@@ -33,6 +33,7 @@
 # %%
 # Must be set before torch initialises CUDA or use_deterministic_algorithms cannot take effect.
 import os
+import shutil
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import random
@@ -91,7 +92,7 @@ print("device:", DEVICE, "| albumentations", A.__version__, "| torch", torch.__v
 # 0.60 m/px, which is exactly the resolution unet_treefinder_best.pt was pretrained at. The whole-tile
 # alternative resizes 180-1500 m windows to 384px, giving 0.61-3.68 m/px -- a 6.1x spread, median
 # 2.4x coarser than the encoder expects. Measured: rho(m/px, IoU)=-0.305, p=0.003 on tiles that fired.
-USE_CROPS = False
+USE_CROPS = True             # the reported configuration; False reproduces the older whole-tile run
 DRIVE = Path("/content/drive/MyDrive/Data")
 # Crops live on Colab LOCAL disk (build_crops_30cm.py writes them there) — thousands of small files
 # read far faster from /content than from Drive. Outputs and run_history stay on Drive so they
@@ -103,6 +104,19 @@ NIR_DIR = DATA / "nir"
 IGNORE_DIR = DATA / "ignore"
 OUT = HIST_DIR / ("finetune30cm_outputs_crops" if USE_CROPS else "finetune30cm_outputs")
 OUT.mkdir(parents=True, exist_ok=True)
+
+# The crops live on LOCAL disk, which a fresh Colab session starts empty. build_crops_30cm.py saves
+# one zip to Drive for exactly this reason, so restore it here rather than failing 40 lines later
+# with a confusing "no images found". Fail LOUDLY if the zip is missing: silently falling back to
+# whole tiles would produce a plausible-looking run of the wrong configuration.
+if USE_CROPS and not (DATA / "images").exists():
+    _zip = DRIVE / "seed30cm_crops.zip"
+    if not _zip.exists():
+        raise SystemExit(f"USE_CROPS=True but neither {DATA}/images nor {_zip} exists.\n"
+                         f"Run data_prep/build_crops_30cm.py first — it writes that zip.")
+    print(f"unpacking {_zip} -> {DATA.parent} ...", flush=True)
+    shutil.unpack_archive(str(_zip), str(DATA.parent))
+    print(f"  restored {len(list((DATA/'images').glob('*.png')))} crop images", flush=True)
 SSL_WEIGHTS = Path("/content/drive/MyDrive/Data/ssl_outputs/ssl_pretrained.pt")
 # Init priority in build_model: SSL (4ch native) -> TreeFinder (60cm, ~3773 labels) -> ImageNet.
 # An ABSENT file falls back silently to ImageNet, so check the "init from ..." line in the log.
