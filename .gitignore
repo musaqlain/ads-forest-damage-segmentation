@@ -1,39 +1,43 @@
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Training outputs (generated, not source code)
-outputs/
-exploration/
-
-# Large data files
+# ---- Data (large; fetch or rebuild with the scripts in this repo) ----
 data/
 *.pkl
+*.gdb/
+*.gpkg
+*.tif
+*.tiff
 
-# Research PDFs
-*.pdf
-*.png
-*.md
+# ---- Generated outputs, checkpoints, figures ----
+outputs/
+exploration/
+figure_assets/
+fig_src/
+*.pt
+*.pth
+run_history.csv
 
-# CNN alignment layer (experimental, incomplete — planned for GSoC research)
-models/
-training/
+# Result figures ARE tracked, but only the curated ones under docs/
+!docs/figures/
 
-# Diagnostic/experimental scripts (not part of core pipeline)
-diagnose_signal.py
-visualize_pkl.py
-analyze_samples.py
-test_pipeline.py
-patch_missing_nir.py
-(delete) diagnose_deepforest.py
-(delete) fix_deepforest_masks.py
+# ---- Notebooks are generated from the .py sources with jupytext ----
+# Regenerate:  jupytext --to ipynb script.py
+*.ipynb
+.ipynb_checkpoints/
 
-# Config with CNN training params (internal)
-config.py
+# ---- Research record and private material, kept locally, not published ----
+archive/
+*.pptx
 
-# Environment / IDE
-.env
-.venv
+# ---- Python ----
+__pycache__/
+*.py[cod]
 *.egg-info/
+.venv/
+.env
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.bak
+*.bak.*

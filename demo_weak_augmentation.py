@@ -10,8 +10,6 @@ Based on:
   - He et al. (KDD 2022) — "Quantifying and Reducing Registration
     Uncertainty of Spatial Vector Labels on Earth Imagery"
 
-STANDALONE: This script imports only from local files (augmentation.py,
-transforms.py) — no external ortho_align dependency.
 
 Usage:
     conda activate ads_env
@@ -38,7 +36,7 @@ from shapely import affinity
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.ops import unary_union
 
-# Local imports — standalone, no external ortho_align dependency
+# Local imports
 from augmentation import SyntheticDisplacer
 
 # ================================================================
@@ -254,7 +252,7 @@ def add_scale_bar(ax, bbox, img_w, img_h):
 def visualize_full_frame(sample, phase, save_path, idx, rng):
     """Full-frame view: downloads wide NAIP tile, shows both polygons.
 
-    Matches the mentor reference image style:
+    Matches the reference image style:
       - Wide view (~1500m) showing full context
       - White outline = aligned (ground truth)
       - Orange outline = displaced (augmented)

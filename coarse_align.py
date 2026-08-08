@@ -205,7 +205,7 @@ class CoarseAligner:
         if boundary.sum() < 10:
             return np.ones_like(signal_map) * 50.0
 
-        dist = distance_transform_edt(~boundary)
+        dist = distance_transform_edt(~ boundary)
         return gaussian_filter(dist.astype(np.float32), sigma=2.0)
 
     # ================================================================

@@ -4,7 +4,7 @@ Bridge Script: Convert aligned polygons into training seed data.
 This script:
   1. Loads aligned polygons from a GeoPackage.
   2. Uses the OBSERVATION_ID to find each original (misaligned) polygon in the source GDB.
-  3. Downloads TWO NAIP tiles per polygon from Oregon 2024 OSIP (high quality, 30cm):
+  3. Downloads ONE NAIP tile per polygon from Oregon 2024 OSIP (high quality, 30cm):
      a. TRAINING TILE: centered on aligned polygon (for weak augmentation)
      b. OVERLAY TILE: covers BOTH original + aligned polygon (for visualization)
   4. Generates DeepForest tree-crown masks (with green-channel fallback).
@@ -269,8 +269,6 @@ def get_deepforest_model():
         return _deepforest_model
     except Exception as e:
         print(f"  ✗ DeepForest not available: {e}")
-        print(f"    → Using green-channel vegetation mask as fallback")
-        print(f"    → To fix: pip install deepforest==1.4.0 torch==2.1.0 torchvision==0.16.0")
         return None
 
 
