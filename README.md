@@ -28,11 +28,19 @@ directly from the imagery**, using the polygon only as a weak hint.
 A U-Net pretrained on [TreeFinder](https://proceedings.neurips.cc/paper_files/paper/2025/file/f22625283cf5812f45933610314259be-Paper-Datasets_and_Benchmarks_Track.pdf),
 fine-tuned on 146 hand-annotated 30 cm tiles from Oregon.
 
-| | region IoU | recall |
-|---|---|---|
-| ADS polygon as-is | 0.115 | — |
-| Fine-tuned, tiles resized | 0.116 ± 0.027 | 0.33 |
-| **Fine-tuned, fixed 0.60 m/px crops** | **0.251 ± 0.019** | **0.46** |
+Two things were changed, and the table separates them: **training on our labels**, and **feeding the
+model imagery at the resolution it was pretrained on**. Neither alone is enough.
+
+| | trained on our labels? | imagery at 0.60 m/px? | region IoU | recall |
+|---|:---:|:---:|---|---|
+| Use the ADS polygon as the answer | — | — | 0.115 | — |
+| TreeFinder model, used as-is | no | no | 0.040 | — |
+| TreeFinder model, used as-is | no | **yes** | 0.108 | — |
+| Fine-tuned, whole tiles squashed to 384 px | **yes** | no | 0.116 ± 0.027 | 0.33 |
+| **Fine-tuned, cut into 0.60 m/px crops** | **yes** | **yes** | **0.251 ± 0.019** | **0.46** |
+
+Fixing the resolution alone gets 0.108. Training on our labels alone gets 0.116. Doing both gets
+0.251 — more than the two gains added together.
 
 ![Best predictions](docs/figures/sheet_best.jpg)
 
@@ -40,12 +48,20 @@ fine-tuned on 146 hand-annotated 30 cm tiles from Oregon.
 
 ### The main finding: pixel scale was the bottleneck, not data volume
 
-Tiles cover 180 m to 1500 m of ground. Resizing them all to the same 384 px meant the model saw
-resolutions from 0.61 to 3.68 m/px, while its pretrained features were learned at a constant
-0.60 m/px. A dead tree crown is 16 px wide at 0.60 m/px and 2.5 px at 3.7 m/px — at which point the
-texture that separates dead canopy from bare soil is simply gone.
+The tiles are not all the same size on the ground: the smallest covers 180 m across, the largest
+1500 m. But every one of them was squashed to the same 384 × 384 pixel image before training. A
+small tile therefore kept fine detail, and a large one was crushed — one pixel ended up meaning
+anywhere from 0.61 m to 3.68 m of real ground.
 
-Cutting tiles into fixed-resolution crops instead of resizing them **more than doubled IoU**.
+That matters because of what a dead tree looks like. A dead conifer and bare soil are almost the
+same colour; the only thing separating them is texture and crown shape. A crown is about 9.5 m
+across, which is **16 pixels wide at 0.60 m/px** — clearly a tree. On a squashed large tile it is
+**2.5 pixels**. At that size the texture is gone, and the model is being asked to separate two things
+that now look identical.
+
+The fix is to stop squashing. Cut every tile into 384 × 384 pieces at a fixed 0.60 m/px instead — the
+exact resolution the pretrained model learned on — and take as many pieces as the tile yields. That
+change alone **more than doubled IoU**.
 
 ![How the crops are built](docs/figures/method_cropping.png)
 
