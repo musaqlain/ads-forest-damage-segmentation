@@ -12,7 +12,7 @@ Contributor: **Muhammad Saqlain** · Mentors: **Ben Weinstein**, **Josh Veitch-M
 Aerial Detection Survey (ADS) polygons are sketched by surveyors from a moving aircraft. They show
 roughly *where* forest damage is, but their boundaries do not follow the actual damage.
 
-<!-- IMAGE 1: ADS polygon over imagery, showing the boundary missing the real damage -->
+![ADS polygons vs. the actual damage](docs/figures/problem_ads_vs_truth.png)
 
 The project began by assuming the polygons were **shifted** and could be moved back into place.
 Testing that was the first result, and it was negative:
