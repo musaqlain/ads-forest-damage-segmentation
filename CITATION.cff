@@ -8,7 +8,7 @@ authors:
   - given-names: Muhammad
     family-names: Saqlain
     email: weecologygsoc@gmail.com
-repository-code: https://github.com/musaqlain/Recovering-Forest-Annotations
+repository-code: https://github.com/musaqlain/ads-forest-damage-segmentation
 abstract: >-
   U.S. Forest Service Aerial Detection Survey (ADS) polygons mark
   roughly where forest damage is, but their boundaries do not follow
