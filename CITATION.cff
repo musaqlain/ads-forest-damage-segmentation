@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+title: >-
+  Recovering pixel-accurate forest damage maps from coarse
+  aerial-survey polygons
+message: If you use this software or its findings, please cite it.
+type: software
+authors:
+  - given-names: Muhammad
+    family-names: Saqlain
+    email: weecologygsoc@gmail.com
+repository-code: https://github.com/musaqlain/Recovering-Forest-Annotations
+abstract: >-
+  U.S. Forest Service Aerial Detection Survey (ADS) polygons mark
+  roughly where forest damage is, but their boundaries do not follow
+  the damage. This project tests whether the polygons can be corrected
+  by rigid re-alignment (they cannot — the corrections are reshapes,
+  not shifts) and instead predicts damage regions directly from 30 cm
+  aerial imagery with a U-Net pretrained on TreeFinder. The main
+  finding is that pixel scale, not data volume, was the bottleneck:
+  cutting tiles into fixed 0.60 m/px crops instead of resizing them
+  more than doubled region IoU (0.116 to 0.251) under spatially
+  blocked cross-validation.
+keywords:
+  - remote sensing
+  - semantic segmentation
+  - forest health
+  - deep learning
+  - aerial imagery
+  - weak supervision
+license: MIT
+date-released: '2026-08-08'

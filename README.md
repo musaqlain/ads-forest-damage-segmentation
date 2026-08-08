@@ -34,7 +34,9 @@ fine-tuned on 146 hand-annotated 30 cm tiles from Oregon.
 | Fine-tuned, tiles resized | 0.116 ± 0.027 | 0.33 |
 | **Fine-tuned, fixed 0.60 m/px crops** | **0.251 ± 0.019** | **0.46** |
 
-<!-- IMAGE 2: sheet_best.png — model predictions that match the labels -->
+![Best predictions](docs/figures/sheet_best.jpg)
+
+*Where it works: the 36 best of 1,908 damage crops. Green = hand-drawn label, blue = model.*
 
 ### The main finding: pixel scale was the bottleneck, not data volume
 
@@ -59,7 +61,17 @@ The cleanest evidence needs no statistics:
 - **False alarms rose to 6.5%** of pixels on tiles verified as healthy.
 - **Labels are partial.** Annotators traced damage clusters, not every tree, so IoU is a lower bound.
 
-<!-- IMAGE 3: sheet_worst.png and sheet_paint_everything.png — the two failure modes -->
+The failures come in exactly two shapes.
+
+![Missed damage](docs/figures/sheet_worst.jpg)
+
+*Failure 1 — nothing predicted. The label (green) is small or the damage is sparse, and the model
+returns empty. Note how many of these are open ground with a few scattered dead trees.*
+
+![Over-prediction](docs/figures/sheet_paint_everything.jpg)
+
+*Failure 2 — the whole crop is painted. 90 crops, mostly from a handful of source tiles. The blue
+often covers healthy dark canopy, so these are genuine false positives, not missing labels.*
 
 Full numbers, negative results and caveats: **[RESULTS.md](RESULTS.md)**.
 
@@ -67,15 +79,7 @@ Full numbers, negative results and caveats: **[RESULTS.md](RESULTS.md)**.
 
 ## How it is evaluated
 
-```
-206 tiles (146 damage + 60 verified healthy)
-   |  cut into 384x384 crops at a fixed 0.60 m/px
-2,320 crops
-   |  grouped by location
-5 folds -> train on 4, test on the 5th, five times
-```
-
-<!-- IMAGE 4: the cross-validation diagram -->
+![Cross-validation design](docs/figures/cv_design.png)
 
 Three rules keep the number honest:
 
