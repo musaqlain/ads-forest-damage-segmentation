@@ -1,8 +1,8 @@
-"""
-Demo: Weak Augmentation Engine Proof-of-Concept
+"""SUPERSEDED — proposal-era demo of the weak-augmentation engine.
 
-Proves that from manually aligned seed samples, we can generate
-UNLIMITED unique training pairs for the alignment CNN.
+Shows that a small set of manually aligned seed samples can generate unlimited
+training pairs for an alignment CNN. The alignment approach is retired (see
+coarse_align.py); kept because it contains the OSIP tile fetch that data_prep/ reuses.
 
 Based on:
   - Jiang et al. (KDD 2021) — "Weakly Supervised Spatial Deep Learning

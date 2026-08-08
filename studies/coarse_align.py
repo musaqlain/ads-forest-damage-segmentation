@@ -1,19 +1,15 @@
-"""
-Stage 1: ProximityAlign-Inspired Alignment for ADS Polygon Correction
-======================================================================
+"""RETIRED — geometric alignment of ADS polygons by grid search over translations.
 
-Adapted from Cherif et al. (ISPRS 2024) "Novel Approaches for Aligning
-Geospatial Vector Maps" — modified for forest damage (diffuse boundaries)
-rather than urban buildings (crisp edges).
+Adapted from Cherif et al. (ISPRS 2024), "Novel Approaches for Aligning Geospatial
+Vector Maps", modified for diffuse forest-damage boundaries rather than crisp
+building edges.
 
-Approach:
-  1. Compute vegetation stress from NAIP (NGRDI + NDVI + brightness anomaly)
-  2. Build proximity map from stress signal boundaries (distance transform)
-  3. Score candidate translations using hybrid energy:
-     a) Inside-outside stress contrast (polygon interior vs surroundings)
-     b) Contour-to-boundary distance (ProximityAlign core energy)
-     c) Out-of-bounds penalty
-  4. Coarse-to-fine grid search for optimal (tx, ty)
+This approach does not work on ADS polygons: their *shape* is wrong, not their
+position, so no translation recovers the true boundary. That negative result is
+what moved the project to semantic segmentation (see training/finetune_30cm.py).
+
+Kept for the record, and because `_compute_stress_map` (NGRDI / NDVI / brightness
+anomaly) is a reusable spectral stress signal.
 """
 
 from __future__ import annotations

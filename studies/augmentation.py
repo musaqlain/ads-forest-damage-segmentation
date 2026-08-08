@@ -1,17 +1,13 @@
-"""
-Synthetic augmentation engine for self-supervised alignment training.
+"""Synthetic affine displacement of polygons, with exactly known ground truth.
 
-Core idea (weak augmentation):
-  Given a small set of manually verified (polygon, NAIP) pairs, generate
-  unlimited training data by synthetically displacing the aligned polygons
-  with known random affine transforms. The model trains to predict the
-  inverse displacement, recovering the correct alignment.
+`SyntheticDisplacer` takes verified (polygon, image) pairs and produces unlimited
+training pairs by applying known random affine transforms. Because the transform is
+known, every generated pair has a perfect label.
 
-  Since the displacement is known exactly, perfect ground-truth labels
-  are available for every generated pair.
-
-  Curriculum schedule: start with large displacements to learn robust
-  features, progressively reduce to fine-grained corrections.
+Used by the affine-recovery studies in this folder to answer "which perturbations
+can a network recover, and up to what magnitude?". The alignment approach those
+studies evaluated is retired (see coarse_align.py), but the displacement engine
+itself is still useful for corrupt-and-recover pretraining.
 """
 
 from __future__ import annotations

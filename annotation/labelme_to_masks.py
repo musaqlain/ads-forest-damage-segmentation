@@ -6,7 +6,7 @@ per-image Labelme `.json` files and rasterises your polygons into binary 0/255 m
 pixel-aligned to each tile, saved as `data/seed30cm/masks/<id>.png` — exactly the format
 `finetune_30cm.py` expects (same output as the old annotate_regions.py).
 
-Labelme workflow (see the run report / PROJECT_MAP.md):
+Labelme workflow (see README.md):
   labelme data/seed30cm/images --output data/seed30cm/labelme --labels damage
   # draw a polygon around each damage CLUSTER; label = "damage" (anything except "prior")
 Then:

@@ -55,7 +55,8 @@ if IN_COLAB:
     OUT_ROOT  = Path("/content/seed30cm_crops")          # local disk: fast to write AND to train from
     ZIP_TO    = Path("/content/drive/MyDrive/Data/seed30cm_crops.zip")
 else:
-    DATA_ROOT = Path(__file__).resolve().parent / "data" / "seed30cm"
+    REPO_ROOT = Path(__file__).resolve().parents[1]      # this file lives in data_prep/
+    DATA_ROOT = REPO_ROOT / "data" / "seed30cm"
     OUT_ROOT  = DATA_ROOT.parent / "seed30cm_crops"
     ZIP_TO    = None
 

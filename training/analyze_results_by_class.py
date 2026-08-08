@@ -13,9 +13,14 @@ from pathlib import Path
 import numpy as np, pandas as pd
 
 DATA = Path("data/seed30cm")
-MET = DATA / "finetune30cm_outputs" / "finetune30cm_metrics.csv"
-if not MET.exists():
-    raise SystemExit(f"{MET} not found — run finetune_30cm.py first (it writes the per-tile IoU).")
+# Crop runs write to *_crops; whole-tile runs to the plain folder. Prefer the newer one.
+CANDIDATES = [DATA / "finetune30cm_outputs_crops" / "finetune30cm_metrics.csv",
+              DATA / "finetune30cm_outputs" / "finetune30cm_metrics.csv"]
+MET = next((p for p in CANDIDATES if p.exists()), None)
+if MET is None:
+    raise SystemExit("No finetune30cm_metrics.csv found in either of:\n  "
+                     + "\n  ".join(str(p) for p in CANDIDATES)
+                     + "\nRun training/finetune_30cm.py first (it writes the per-tile IoU).")
 
 met = pd.read_csv(MET, dtype={"id": str}); met["id"] = met["id"].str.zfill(4)
 idx = pd.read_csv(DATA / "index.csv", dtype={"id": str}); idx["id"] = idx["id"].str.zfill(4)

@@ -1,11 +1,9 @@
-"""
-Rasterization utilities and image normalization for the alignment pipeline.
+"""Polygon rasterisation and NAIP image normalisation.
 
-Key functions:
-  - rasterize_polygon: Convert a shapely Polygon to a binary numpy mask
-  - rasterize_polygon_soft: Same but with Gaussian blur for smooth optimization
-  - normalize_naip: Convert uint8 NAIP image to float32 tensor
-  - make_rasterio_transform: Build an Affine transform for a tile's bbox
+  - rasterize_polygon       shapely Polygon -> binary numpy mask
+  - rasterize_polygon_soft  same, Gaussian-blurred for smooth optimisation
+  - normalize_naip          uint8 NAIP image -> float32 tensor
+  - make_rasterio_transform Affine transform for a tile bounding box
 """
 
 from __future__ import annotations

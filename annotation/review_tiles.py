@@ -7,8 +7,8 @@ dataset_manifest.py, rebuilds masks, rewrites manifest.csv).
 
 Run it in ads_env (Labelme + OpenCV live there):
 
-    python review_tiles.py negatives         # sweep the 150 confirmed-negative tiles
-    python review_tiles.py empty             # review the 10 opened-empty tiles
+    python review_tiles.py negatives         # sweep the auto-built negative tiles
+    python review_tiles.py empty             # review tiles opened but left empty
     python review_tiles.py empty 0451 0470   # review specific ids instead
 
 THE THREE VERDICTS  (you pick a LABEL when you draw — that is all):

@@ -1,5 +1,8 @@
-"""
-Bridge Script: Convert aligned polygons into training seed data.
+"""SUPERSEDED — proposal-era seed builder: aligned polygons -> NAIP training pairs.
+
+Replaced by data_prep/build_30cm_seed_tiles.py, which fetches true 30 cm OSIP imagery
+and writes an ADS prior channel instead of DeepForest crown masks. Kept because it
+documents the original NAIP + DeepForest data path.
 
 This script:
   1. Loads aligned polygons from a GeoPackage.

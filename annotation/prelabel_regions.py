@@ -5,7 +5,7 @@ Generates ROUGH candidate "damage" polygons from image signals so you don't star
 from a blank tile in Labelme — you just FIX the drafts (delete wrong ones, drag
 vertices). Writes one Labelme JSON per tile into data/seed30cm/labelme/.
 
-Signals used (see PROJECT_MAP.md / the measured AUC table):
+Signals used:
   * redness  = (R - G)/(R + G)   — dead conifers turn red/brown (R > G)
   * NDVI     = (NIR - R)/(NIR + R) if a NIR band is present (nir/<id>.png) — dead = low
   * brightness anomaly           — bare/gray patches (clearcut, bleached snags)
