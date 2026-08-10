@@ -37,10 +37,16 @@ model imagery at the resolution it was pretrained on**. Neither alone is enough.
 | TreeFinder model, used as-is | no | no | 0.040 | — |
 | TreeFinder model, used as-is | no | **yes** | 0.108 | — |
 | Fine-tuned, whole tiles squashed to 384 px | **yes** | no | 0.116 ± 0.027 | 0.33 |
-| **Fine-tuned, cut into 0.60 m/px crops** | **yes** | **yes** | **0.251 ± 0.019** | **0.46** |
+| **Fine-tuned, cut into 0.60 m/px crops** | **yes** | **yes** | **0.257 ± 0.020** | **0.47 ± 0.04** |
 
 Fixing the resolution alone gets 0.108. Training on our labels alone gets 0.116. Doing both gets
-0.251 — more than the two gains added together.
+0.257 — more than the two gains added together.
+
+Every row is the mean of repeated identical runs (4 for the crop row, 5 for the whole-tile row); the
+spread is run-to-run training noise, not a confidence interval. The two sets of runs do not overlap
+at all — the worst crop run beats the best whole-tile run — so a permutation test lands on its floor,
+**p = 0.008**. Scored per source site rather than per crop the number is 0.245 ± 0.021, so the result
+is not an artefact of some sites contributing more crops than others.
 
 ![Best predictions](docs/figures/sheet_best.jpg)
 
@@ -72,9 +78,14 @@ The cleanest evidence needs no statistics:
 
 ### What does not work yet
 
-- **Small damage is missed.** About 25% of damaged crops get no prediction at all. The model has
-  learned a large-area texture cue and cannot resolve individual dead trees.
-- **False alarms rose to 6.5%** of pixels on tiles verified as healthy.
+- **Small damage is missed.** About 15% of damaged crops get no prediction at all — the model
+  outputs nothing, which scores recall 0. It has learned a large-area texture cue and cannot
+  resolve individual dead trees.
+- **False alarms on healthy ground: 7.0% ± 2.5% of pixels**, and one verified-healthy crop was 99.6%
+  painted. This is the largest remaining source of lost IoU.
+- **Training is cut short.** The best epoch is chosen on held-out data; in the latest run 2 of 5
+  folds chose the very last epoch available, meaning the model was still improving when the budget
+  ended. The reported number is therefore a floor, not a ceiling.
 - **Labels are partial.** Annotators traced damage clusters, not every tree, so IoU is a lower bound.
 
 The failures come in exactly two shapes.

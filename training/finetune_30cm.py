@@ -900,7 +900,19 @@ _hd_iou = results[HEAD][0]
 _hd_pred = results[HEAD][2]
 _is_silent = np.array([bool(((_hd_pred[i] > thr_of(i)) & valid_mask(i)).sum() == 0) for i in range(len(X))])
 _ok = np.isfinite(_mpp) & ~np.isnan(_hd_iou)
-if _ok.sum() >= 10:
+# In CROP mode every sample is 0.60 m/px by construction, so m/px has no variance left to correlate
+# against. The test below would report rho ~ 0, p ~ 1 and its own reading text would then say "the
+# bottleneck is data volume, not pixel scale" — the exact OPPOSITE of what a null here means. A
+# null with zero predictor variance is not evidence; the resolution question was already answered by
+# fixing it. Skip the block rather than print a conclusion that inverts the finding.
+_mpp_ratio = (np.nanmax(_mpp[_ok]) / np.nanmin(_mpp[_ok])) if _ok.sum() else 1.0
+if _ok.sum() >= 10 and _mpp_ratio < 1.05:
+    print(f"\nEFFECTIVE-RESOLUTION diagnostic SKIPPED: every crop is "
+          f"{np.nanmedian(_mpp[_ok]):.2f} m/px (spread {_mpp_ratio:.2f}x).\n"
+          f"  There is no resolution variation left to correlate with — that is the POINT of the crop\n"
+          f"  pipeline, not a null result. The resolution evidence is the whole-tile run (rho=-0.305,\n"
+          f"  p=0.003) and the zero-shot jump 0.040 -> 0.108. Run with USE_CROPS=False to see it.")
+elif _ok.sum() >= 10:
     print("\n" + "=" * 80)
     print("EFFECTIVE RESOLUTION vs PERFORMANCE  (damage tiles only)")
     print("=" * 80)
