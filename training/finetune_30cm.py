@@ -167,7 +167,12 @@ SEED_REPEATS = 1
 # det_auc across that boundary — they are different statistics.
 # 2026-08-05-crops060       : + fixed 0.60 m/px crops (USE_CROPS). Appended automatically so a crop
 #                             run can never pool with a whole-tile run in the stability readout.
+# The epoch budget is part of the recipe, so a run with a different one must NOT pool with these in
+# the stability check. Only tag when it differs from the default, so the 4 logged crop runs keep the
+# tag they were written with.
+_FT_EPOCHS_DEFAULT = 30 if USE_CROPS else 60
 TRAIN_VER = ("2026-07-27-thr-tuned" + ("-crops060" if USE_CROPS else "")
+             + ("" if FT_EPOCHS == _FT_EPOCHS_DEFAULT else f"-ep{FT_EPOCHS}")
              + ("" if FOLDS_TO_RUN is None else f"-folds{len(FOLDS_TO_RUN)}"))
 
 GROUPED_CV = True            # spatially-blocked folds; random CV inflates scores via spatial leakage
