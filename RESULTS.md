@@ -72,8 +72,27 @@ Worth reporting; each one cost time and closed a direction.
 | Affine alignment (ProximityAlign-style) | Fails — the polygon shape is wrong, not its position |
 | NDVI / NIR as an extra input channel | Hurt, then no-op once the `conv1` re-init bug was fixed |
 | ADS prior as a soft distance-transform hint | Consistently negative across 5 logged runs |
-| Per-fold threshold tuning | Worth ≈ 0.01, well inside run-to-run noise |
+| Per-fold threshold tuning | **Reversed 2026-08-09**: the paired A/B now gives −0.024 IoU for fixed 0.5 (0.278 vs 0.254) and 415 silent crops vs 290. Tuning helps; earlier fixed-0.5 numbers were the optimistic ones |
 | Averaging seed repeats at a fixed 0.5 threshold | Makes variance *worse* — averaging sharpens probabilities |
+| Raising the minimum-label threshold to drop thin crops | Would lift IoU 0.257 → 0.409 while leaving recall flat — a metric artefact, not an improvement. Rejected |
+
+### Performance by damage size
+
+| damage in crop | n | IoU | recall | silent |
+|---|---|---|---|---|
+| <0.5% | 141 | 0.020 | 0.21 | 33% |
+| 0.5–1% | 117 | 0.115 | 0.51 | 27% |
+| 1–2% | 217 | 0.147 | 0.52 | 27% |
+| 2–5% | 357 | 0.218 | 0.58 | 16% |
+| 5–10% | 306 | 0.337 | 0.57 | 13% |
+| 10–25% | 397 | 0.373 | 0.56 | 11% |
+| >25% | 373 | 0.409 | 0.50 | 3% |
+
+IoU rises 20× while recall stays flat above 0.5%. The gradient is mostly the geometry of IoU — a
+fixed boundary error costs far more on a small target — not the model failing. The exception is the
+bottom row, where recall genuinely collapses to 0.21 and a third of crops go silent. Median
+predicted/label area ratio is **1.0×**: the model predicts the right *amount* of damage in the wrong
+*place*, so this is a localisation problem, not a calibration one.
 
 ---
 
@@ -84,8 +103,14 @@ Worth reporting; each one cost time and closed a direction.
    swing almost exactly. The model has learned a large-area texture cue and cannot resolve
    individual dead crowns.
 2. **Commission 7.0% ± 2.5%** on verified damage-free tiles, up from ~2%, because cropping cut the
-   share of confirmed negatives from 29% to 18%. Worst case: one healthy crop 99.6% painted.
-   Untested fix: overlap the negative crops (`STRIDE_FRAC_NEG < 1.0`).
+   share of confirmed negatives from 29% to 18%. **191 of 412 healthy crops fired**; worst case 99.6%
+   painted. Untested fix: overlap the negative crops (`STRIDE_FRAC_NEG < 1.0`).
+2b. **Both failure modes share one cause — open, sparse woodland.** The flooded damage crops and the
+   false alarms on healthy ground are the same land cover: scattered dark crowns over pale soil. The
+   successes are closed-canopy stands with a clear damage edge. The model has learned a texture that
+   marks damage in dense forest and marks healthy ground in open forest. This is a coverage gap in
+   the 60 confirmed-negative tiles, not a modelling defect, and it makes *targeted* hard-negative
+   collection in open woodland the highest-value next data.
 3. **The epoch budget truncates training.** `FT_EPOCHS = 30`; in the latest run folds 2 and 5 both
    selected epoch 30 of 30 on inner-validation, i.e. the model had not stopped improving. The
    headline is a floor. Raising the budget is the cheapest untried improvement.

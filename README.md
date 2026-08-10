@@ -50,7 +50,9 @@ is not an artefact of some sites contributing more crops than others.
 
 ![Best predictions](docs/figures/sheet_best.jpg)
 
-*Where it works: the 36 best of 1,908 damage crops. Green = hand-drawn label, blue = model.*
+*Where it works: the 36 best of 1,908 damage crops (green = hand-drawn label, blue = model). These
+are closed-canopy forest with a clear edge between damaged and healthy stand — the model traces that
+edge closely, reaching IoU 0.98 at best.*
 
 ### The main finding: pixel scale was the bottleneck, not data volume
 
@@ -88,17 +90,56 @@ The cleanest evidence needs no statistics:
   ended. The reported number is therefore a floor, not a ceiling.
 - **Labels are partial.** Annotators traced damage clusters, not every tree, so IoU is a lower bound.
 
-The failures come in exactly two shapes.
+The failures look like two different problems but are one problem.
 
 ![Missed damage](docs/figures/sheet_worst.jpg)
 
-*Failure 1 — nothing predicted. The label (green) is small or the damage is sparse, and the model
-returns empty. Note how many of these are open ground with a few scattered dead trees.*
+*Failure 1 — nothing predicted at all. 290 of 1,908 crops. A silent crop scores recall 0.*
 
 ![Over-prediction](docs/figures/sheet_paint_everything.jpg)
 
-*Failure 2 — the whole crop is painted. 90 crops, mostly from a handful of source tiles. The blue
-often covers healthy dark canopy, so these are genuine false positives, not missing labels.*
+*Failure 2 — the crop is flooded. 120 crops, clustered on a few source tiles: 21 come from one tile
+alone. The model finds the damage and then keeps going.*
+
+![False alarms on healthy ground](docs/figures/sheet_negatives_worst.jpg)
+
+*The same failure on ground independently verified as damage-free — 191 of 412 healthy crops got some
+false damage, the worst 99.6% painted. There is no "the label was incomplete" excuse here.*
+
+### The failures share one cause
+
+Compare the terrain. The successes are **closed-canopy forest**: dense green stand, damage as a
+distinct patch, a real edge to trace. Almost every failure — silent or flooded, on damage tiles or
+healthy ones — is **open, sparse, dry woodland**: scattered dark crowns over pale soil.
+
+That texture genuinely *is* damage in some places and healthy open forest in others, and the model
+cannot tell them apart. It is not noise; it is one land-cover type the training data barely covers.
+Only 60 confirmed-healthy tiles exist, and few of them are open woodland.
+
+**So the next step is not more data — it is more of one specific kind of data.**
+
+### Small damage is the hard case — but IoU exaggerates how hard
+
+Splitting the crops by how much of them the annotation marks as damaged:
+
+| damage in crop | crops | IoU | recall | model silent |
+|---|---|---|---|---|
+| under 0.5% | 141 | 0.020 | 0.21 | 33% |
+| 0.5 – 1% | 117 | 0.115 | 0.51 | 27% |
+| 1 – 2% | 217 | 0.147 | 0.52 | 27% |
+| 2 – 5% | 357 | 0.218 | 0.58 | 16% |
+| 5 – 10% | 306 | 0.337 | 0.57 | 13% |
+| 10 – 25% | 397 | 0.373 | 0.56 | 11% |
+| over 25% | 373 | 0.409 | 0.50 | 3% |
+
+IoU climbs 20× across these rows. **Recall does not** — it is flat at roughly 0.5 everywhere above
+0.5%. The model finds about the same share of the damage regardless of patch size; IoU simply
+punishes a fixed boundary error far more when the target is small. Only the bottom row is a real
+failure, and it is a real one: a third of those crops get no prediction at all.
+
+This also settles a tempting shortcut. Scoring only crops with over 25% damage would report **0.409**
+instead of 0.257 — but recall would be unchanged, because nothing about the model improved. The
+number would rise purely by deleting the hard cases, so every crop is kept.
 
 Full numbers, negative results and caveats: **[RESULTS.md](RESULTS.md)**.
 
