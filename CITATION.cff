@@ -18,7 +18,7 @@ abstract: >-
   aerial imagery with a U-Net pretrained on TreeFinder. The main
   finding is that pixel scale, not data volume, was the bottleneck:
   cutting tiles into fixed 0.60 m/px crops instead of resizing them
-  more than doubled region IoU (0.116 to 0.251) under spatially
+  more than doubled region IoU (0.116 to 0.290) under spatially
   blocked cross-validation.
 keywords:
   - remote sensing
