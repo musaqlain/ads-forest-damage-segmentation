@@ -28,11 +28,55 @@
 # so report a mean over repeats, never one run.
 
 # %%
-# !pip install -q segmentation-models-pytorch "albumentations>=1.3,<2"
+# !pip install -q segmentation-models-pytorch "albumentations>=1.3,<2" comet_ml
+
+# %%
+# --- Comet ML experiment tracking (optional) ---------------------------------------------------
+# comet_ml has to be imported before torch for its framework hooks to attach, so this cell runs
+# first. Everything below is written so that a missing key, no network, or a Comet outage costs
+# NOTHING: `exp` falls back to a no-op object and the 2-hour run continues untouched. A logging
+# library must never be able to kill a training run.
+#
+# THE API KEY IS DELIBERATELY NOT IN THIS FILE. This script is public on GitHub, and a key that is
+# committed once is a key that is leaked forever, even if a later commit removes it. Provide it as:
+#   Colab  -> key icon in the left sidebar -> add secret COMET_API_KEY -> toggle "Notebook access"
+#   local  -> export COMET_API_KEY=...
+import os
+
+COMET_PROJECT = "ads-forest-damage"
+COMET_IMG_EVERY = 100    # log every Nth crop from the IoU-SORTED list, so the sample spans
+                         # best -> worst evenly instead of clustering. None = no individual crops.
+
+class _NoExp:
+    """Stand-in for a Comet Experiment so every exp.* call site works unchanged when it is off."""
+    def __getattr__(self, _n):
+        return lambda *a, **k: None
+    def __bool__(self):
+        return False
+
+exp = _NoExp()
+try:
+    import comet_ml
+    _key = os.environ.get("COMET_API_KEY")
+    if not _key:
+        try:
+            from google.colab import userdata
+            _key = userdata.get("COMET_API_KEY")
+        except Exception:
+            _key = None
+    if _key:
+        exp = comet_ml.Experiment(api_key=_key, project_name=COMET_PROJECT,
+                                  auto_metric_logging=False, auto_param_logging=False,
+                                  auto_output_logging="simple", display_summary_level=0)
+        print(f"  Comet: logging to project '{COMET_PROJECT}'")
+    else:
+        print("  Comet: no COMET_API_KEY found -> tracking OFF. The run itself is unaffected.\n"
+              "         Colab: key icon in the sidebar -> secret COMET_API_KEY -> Notebook access.")
+except Exception as _e:
+    print(f"  Comet: disabled ({type(_e).__name__}: {_e}) -> the run itself is unaffected.")
 
 # %%
 # Must be set before torch initialises CUDA or use_deterministic_algorithms cannot take effect.
-import os
 import shutil
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
@@ -135,10 +179,17 @@ FOLDS_TO_RUN = None          # e.g. [0, 2] to screen on two geographically disti
 # An "epoch" is one pass over the training set, so the same epoch count is ~6x more gradient steps
 # on the crop dataset (~1300 samples) than on the 206 whole tiles. Scale it down or the crop run
 # takes hours AND trains far longer than the recipe every existing number was measured under.
-FT_EPOCHS = 30 if USE_CROPS else 60
+# 2026-08-14: raised 30 -> 60 for crops. In the 2026-08-09 run 2 of 5 folds selected the LAST
+# available epoch on inner-validation, i.e. the budget stopped training that was still improving, so
+# every crop number so far is a floor. This tags train_ver "-ep60" and therefore cannot pool with the
+# four logged 30-epoch runs; it is a new configuration, not a repeat.
+FT_EPOCHS = 60 if USE_CROPS else 60
 EVAL_EVERY = 3 if USE_CROPS else 5
 
-BEST_EP_MIN_FRAC = 0.5       # epochs before this fraction of the budget cannot win (ep>=30 of 60)
+# Keep the ABSOLUTE floor on the eligible epoch at 15 for crops rather than letting it scale with the
+# budget. At 0.5 a 60-epoch run could not pick epoch 15, which fold 3 chose last time — that would
+# change two things at once and make the comparison unreadable.
+BEST_EP_MIN_FRAC = 0.25 if USE_CROPS else 0.5   # epochs before this fraction of the budget cannot win
 BEST_EP_MARGIN   = 0.005     # a new epoch must beat the incumbent by this much to replace it
 
 TTA       = True             # 8-way dihedral averaging at inference
@@ -177,6 +228,16 @@ TRAIN_VER = ("2026-07-27-thr-tuned" + ("-crops060" if USE_CROPS else "")
 
 GROUPED_CV = True            # spatially-blocked folds; random CV inflates scores via spatial leakage
 RUN_ABLATION = False         # also train the with-prior arm (~3x runtime); settled negative
+
+# Name the Comet run after the recipe, not the clock, so two runs of the same configuration are
+# visibly the same configuration in the UI. TRAIN_VER already encodes every knob that changes it.
+exp.set_name(f"{TRAIN_VER} · {datetime.now():%m-%d %H:%M}")
+exp.add_tags([TRAIN_VER, "crops" if USE_CROPS else "whole-tile", f"ep{FT_EPOCHS}", GPU_NAME])
+exp.log_parameters({"train_ver": TRAIN_VER, "use_crops": USE_CROPS, "size": SIZE,
+                    "ft_epochs": FT_EPOCHS, "eval_every": EVAL_EVERY, "n_folds": N_FOLDS,
+                    "folds_to_run": str(FOLDS_TO_RUN), "grouped_cv": GROUPED_CV,
+                    "best_ep_min_frac": BEST_EP_MIN_FRAC, "tta": TTA, "gpu": GPU_NAME,
+                    "tune_threshold": TUNE_THRESHOLD, "seed_repeats": SEED_REPEATS})
 USE_NDVI = False             # tested at 142 and 206 tiles, did not help
 PRIOR_DT_TAU = 16            # px at SIZE: falloff of the soft prior hint outside the polygon
 # Ignored when manifest.csv is present — the manifest curates negatives itself. To train damage-only,
@@ -595,7 +656,7 @@ def run_cv(use_prior, rep=0):
 
         best_iou, best_state, best_ep = -1.0, None, -1
         _min_ep = int(BEST_EP_MIN_FRAC * FT_EPOCHS)
-        _loss_min, _loss_last = float("inf"), float("nan")
+        _loss_min, _loss_last, _ep_losses = float("inf"), float("nan"), []
         model.train()
         for ep in range(FT_EPOCHS):
             ep_loss = 0.0
@@ -609,8 +670,19 @@ def run_cv(use_prior, rep=0):
             sched.step()
             _loss_last = ep_loss / max(1, len(dl))
             _loss_min = min(_loss_min, _loss_last)
+            _ep_losses.append(_loss_last)
+            # One curve per fold rather than one pooled curve: the folds train on different amounts
+            # of data, so a pooled average hides exactly the thing worth seeing — which fold is
+            # still climbing when the budget ends. Only the headline arm is logged; the ablation
+            # would double every chart for a result already settled negative.
+            if not use_prior and rep == 0:
+                # Loss only. The LR schedule is a deterministic cosine that is identical every run,
+                # so five LR curves are five charts that can never tell anyone anything.
+                exp.log_metric(f"loss/fold{f+1}", _loss_last, step=ep + 1)
             if (ep + 1) % EVAL_EVERY == 0 or ep == FT_EPOCHS - 1:
                 iv = _inner_iou()
+                if not use_prior and rep == 0:
+                    exp.log_metric(f"inner_val_iou/fold{f+1}", iv, step=ep + 1)
                 if (ep + 1) >= _min_ep and iv > best_iou + BEST_EP_MARGIN:
                     best_iou, best_ep = iv, ep + 1
                     best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
@@ -623,13 +695,23 @@ def run_cv(use_prior, rep=0):
             print(f"      -> restored best epoch {best_ep} of {FT_EPOCHS} "
                   f"(inner-val IoU {best_iou:.3f}; epochs before {_min_ep} not eligible)", flush=True)
         ep_choices.append(best_ep)
-        # With cosine decay to zero the loss should settle at its minimum. If it ends materially
-        # ABOVE the best value it reached, this fold did not converge, and its score describes a
-        # failed optimisation rather than the method.
-        if np.isfinite(_loss_last) and _loss_last > _loss_min * 1.02:
-            diverged.append(f + 1)
-            print(f"      !! fold {f+1} DID NOT CONVERGE: final loss {_loss_last:.3f} vs best "
-                  f"{_loss_min:.3f} (+{100*(_loss_last/_loss_min-1):.1f}%)", flush=True)
+        # Convergence is measured on the TAIL, not against the global minimum.
+        # 2026-08-14: the old test compared the final epoch's mean loss to the best epoch mean ever
+        # seen. That is biased — the minimum of N noisy epoch means sits systematically below their
+        # true level, and N doubled when the budget went 30 -> 60, so the warning fired MORE often on
+        # a run that had trained BETTER. It has already misfired twice (fold 1 at 30 ep, fold 3 at
+        # 60 ep, both with a loss curve that was still descending) and cost one headline. Real
+        # divergence means the loss trends UP at the end, so compare the last decile of epochs with
+        # the decile before it; that is robust to the augmentation noise in any single epoch.
+        _tail = max(3, FT_EPOCHS // 10)
+        if len(_ep_losses) >= 2 * _tail:
+            _late = float(np.mean(_ep_losses[-_tail:]))
+            _prev = float(np.mean(_ep_losses[-2 * _tail:-_tail]))
+            if np.isfinite(_late) and np.isfinite(_prev) and _late > _prev * 1.02:
+                diverged.append(f + 1)
+                print(f"      !! fold {f+1} DID NOT CONVERGE: mean loss over the last {_tail} epochs "
+                      f"{_late:.3f} vs {_prev:.3f} over the {_tail} before (+{100*(_late/_prev-1):.1f}%)",
+                      flush=True)
         if not use_prior and rep == 0:
             torch.save(model.state_dict(), OUT / f"unet_30cm_fold{f+1}.pt")
 
@@ -671,6 +753,11 @@ def run_cv(use_prior, rep=0):
                 oof_iou[gi], oof_dice[gi] = iou, dice
         print(f"  [{arm}] fold {f+1}/{len(folds)} IoU={np.nanmean(oof_iou[val_idx]):.3f} "
               f"(threshold {thr:.2f}, {len(val_idx)} test tiles)")
+        if not use_prior and rep == 0:
+            # step = fold number, so these read as a per-fold bar chart rather than a time series.
+            exp.log_metrics({"fold/test_iou": float(np.nanmean(oof_iou[val_idx])),
+                             "fold/threshold": float(thr),
+                             "fold/epoch_kept": float(best_ep)}, step=f + 1)
     print(f"  [{'w/ soft-prior' if use_prior else 'no prior'}] epochs kept per fold: {ep_choices} "
           f"(all >= {int(BEST_EP_MIN_FRAC*FT_EPOCHS)} by construction)")
     # FT_EPOCHS is a budget, not a setting: the epoch that ships is chosen on inner-val, so extra
@@ -766,6 +853,27 @@ for up in ([HEAD, True] if RUN_ABLATION else [HEAD]):
 if not RUN_ABLATION:
     print("\n(with-prior ablation SKIPPED — settled negative, logged 5x in run_history.csv."
           " Set RUN_ABLATION=True for the final paper table.)")
+
+# Cross-validation is ~95% of the runtime and everything after it is arithmetic on its output, so a
+# crash in between throws away two hours for nothing — which is exactly what happened on 2026-08-13.
+# Checkpoint the predictions here. Quantised to uint8 (the decision thresholds are all >= 0.20, so
+# 1/255 resolution changes no binarisation) they compress to a few hundred MB, and every metric,
+# table and figure below can be recomputed from this file without touching a GPU.
+SAVE_OOF_CACHE = True
+if SAVE_OOF_CACHE:
+    try:
+        _cache = OUT / f"oof_cache_{TRAIN_VER}.npz"
+        np.savez_compressed(
+            _cache,
+            pred_u8=np.stack([(np.clip(p, 0, 1) * 255).astype(np.uint8) for p in results[HEAD][2]]),
+            iou=np.asarray(results[HEAD][0], np.float32),
+            dice=np.asarray(results[HEAD][1], np.float32),
+            thr=np.asarray([thr_of(i) for i in range(len(X))], np.float32),
+            ids=np.asarray(ids))
+        print(f"  OOF predictions cached -> {_cache.name} "
+              f"({_cache.stat().st_size / 1e6:.0f} MB) — the analysis below is rebuildable from this.")
+    except Exception as _e:
+        print(f"  (OOF cache skipped: {type(_e).__name__}: {_e} — the run itself is unaffected.)")
 
 # %% [markdown]
 # ## Paired threshold A/B (zero GPU cost)
@@ -911,6 +1019,11 @@ _ok = np.isfinite(_mpp) & ~np.isnan(_hd_iou)
 # null with zero predictor variance is not evidence; the resolution question was already answered by
 # fixing it. Skip the block rather than print a conclusion that inverts the finding.
 _mpp_ratio = (np.nanmax(_mpp[_ok]) / np.nanmin(_mpp[_ok])) if _ok.sum() else 1.0
+# Defined BEFORE the branch, not inside it: the report section reads this unconditionally, so when
+# the diagnostic is skipped (crop mode, the normal case now) the run crashed here at the very last
+# step with everything already computed. A variable consumed outside a branch must be initialised
+# outside it.
+_rows_mpp = []
 if _ok.sum() >= 10 and _mpp_ratio < 1.05:
     print(f"\nEFFECTIVE-RESOLUTION diagnostic SKIPPED: every crop is "
           f"{np.nanmedian(_mpp[_ok]):.2f} m/px (spread {_mpp_ratio:.2f}x).\n"
@@ -1071,6 +1184,125 @@ if _cov_scored.sum():
           "  it would only inflate the number. A rising one means thin labels are genuinely noisy\n"
           "  supervision — which is an argument for dropping them from TRAINING, never from scoring.")
 
+_extra_report = []
+
+# --- SCALING: which corrections should you actually emit? -------------------------------------
+# There are ~48k ADS polygons and nobody can hand-check them, so "mean IoU 0.278" is the wrong
+# question for deployment. The right one: rank crops by a signal computable WITHOUT a label, emit a
+# model correction for the top k% and KEEP the original ADS polygon everywhere else. That system
+# scores  mean(model_iou where selected, prior_iou elsewhere)  and is bounded below by prior-echo,
+# so it cannot do harm. The coverage at which it stops beating prior-echo is the honest answer to
+# "how much of the survey can this project fix today" — a far more useful claim than a mean IoU.
+# These signals are DIAGNOSTICS. A deployed rule must be frozen on inner-val exactly like the
+# decision threshold is, or the coverage curve is just test-set selection wearing a hat.
+_sc = np.where(_cov_scored & np.isfinite(prior_iou))[0]
+if len(_sc) >= 50:
+    from scipy.stats import spearmanr as _spr
+    _fracs = (0.10, 0.25, 0.50, 0.75, 1.00)
+    _m_iou, _p_iou = _hd_iou[_sc], prior_iou[_sc]
+    _sig = {k: np.zeros(len(_sc)) for k in ("peak prob", "decisiveness", "agrees with ADS")}
+    for _k, _i in enumerate(_sc):
+        _v = valid_mask(_i)
+        _p = _hd_pred[_i][_v]
+        if _p.size == 0:
+            continue
+        _t = thr_of(_i)
+        _sig["peak prob"][_k] = float(np.percentile(_p, 99))
+        _sig["decisiveness"][_k] = float((np.abs(_p - _t) > 0.25).mean())
+        # Label-free and available for all 48k: does the model's mask overlap the survey polygon?
+        _bm = (_hd_pred[_i] > _t) & _v
+        _pm = (X[_i][2] > .5) & _v
+        _un = int((_bm | _pm).sum())
+        _sig["agrees with ADS"][_k] = float((_bm & _pm).sum() / _un) if _un else 0.0
+    print("\n" + "=" * 80)
+    print("SELECTIVE CORRECTION — how much of the survey could you fix today?")
+    print("=" * 80)
+    print(f"  keep every ADS polygon = {_p_iou.mean():.3f}   |   correct every crop = {_m_iou.mean():.3f}")
+    print(f"  {'confidence signal':<20} {'rho vs IoU':>16} "
+          + "".join(f"{str(int(_f*100)) + '%':>8}" for _f in _fracs))
+    for _nm, _cf in _sig.items():
+        _rho, _pv = _spr(_cf, _m_iou)
+        _order = np.argsort(-_cf, kind="stable")
+        _cells = []
+        for _f in _fracs:
+            _use = np.zeros(len(_sc), bool)
+            _use[_order[:max(1, int(round(_f * len(_sc))))]] = True
+            _cells.append(np.where(_use, _m_iou, _p_iou).mean())
+        print(f"  {_nm:<20} {_rho:>+7.3f} p={_pv:<7.4f}" + "".join(f"{_c:>8.3f}" for _c in _cells))
+        _extra_report.append(f"- selective correction [{_nm}]: rho {_rho:+.3f} | system IoU "
+                             + " ".join(f"{int(_f*100)}%={_c:.3f}" for _f, _c in zip(_fracs, _cells)))
+        exp.log_curve(f"selective/{_nm.replace(' ', '_')}",
+                      x=[_f * 100 for _f in _fracs], y=[float(_c) for _c in _cells])
+        exp.log_metric(f"selective/rho_{_nm.replace(' ', '_')}", float(_rho))
+    print("  Each cell = SYSTEM IoU when a correction is emitted for that share of crops and the ADS\n"
+          "  polygon is kept for the rest. A cell ABOVE the 100% column means selecting is worth it,\n"
+          "  and the gap tells you how much of the 48k could ship without a human in the loop.")
+
+# --- Is "open, bare-ground woodland" really the shared failure mode? ---------------------------
+# The failure sheets all LOOK like scattered dark crowns over pale soil, but eyeballing 36 crops is
+# an anecdote, and the README currently states the shared-cause claim as fact. Excess green
+# (ExG = 2G-R-B) separates canopy from bare soil, so the non-green pixel fraction is a cheap
+# openness proxy. Three questions, ordered by what each would change:
+#   1. does openness predict a LOW IoU?                     -> the failure is a land-cover gap
+#   2. does openness predict going SILENT?                  -> ... specifically a recall gap there
+#   3. does openness predict FALSE ALARMS on verified-healthy crops?
+#      -> decisive: no partial-label excuse exists there, so targeted negatives are the fix
+# If all three come back null the shared-cause paragraph in the README is unsupported and must be
+# retracted rather than defended.
+try:
+    from scipy.stats import spearmanr as _spr2, mannwhitneyu as _mwu2
+    _bare = np.zeros(len(X), np.float32)
+    for _i in range(len(X)):
+        _rgbf = X[_i][0][..., :3].astype(np.float32) / 255.0
+        _bare[_i] = float(((2 * _rgbf[..., 1] - _rgbf[..., 0] - _rgbf[..., 2]) < 0.05).mean())
+    print("\n" + "=" * 80)
+    print("TERRAIN PROXY — does open / bare ground explain the failures?")
+    print("=" * 80)
+    _bs = np.where(_cov_scored)[0]
+    _qb = np.nanpercentile(_bare[_bs], [0, 25, 50, 75, 100])
+    print(f"  {'bare-ground fraction':<22} {'n':>5} {'IoU':>7} {'recall':>8} {'silent':>8}")
+    for _q in range(4):
+        _lo, _hi = _qb[_q], _qb[_q + 1]
+        _sel = np.zeros(len(X), bool)
+        _sel[_bs] = (_bare[_bs] >= _lo) & ((_bare[_bs] <= _hi) if _q == 3 else (_bare[_bs] < _hi))
+        if not _sel.sum():
+            continue
+        print(f"  {f'{_lo:.2f} - {_hi:.2f}':<22} {int(_sel.sum()):>5} "
+              f"{np.nanmean(_hd_iou[_sel]):7.3f} {np.nanmean(recall[_sel]):8.3f} "
+              f"{100*_is_silent[_sel].mean():7.1f}%")
+    _r1, _p1 = _spr2(_bare[_bs], _hd_iou[_bs])
+    print(f"  (1) openness vs IoU              rho={_r1:+.3f}  p={_p1:.4f}  n={len(_bs)}")
+    _extra_report.append(f"- terrain proxy: openness vs IoU rho {_r1:+.3f} (p={_p1:.4f})")
+    _sm, _fr = _bare[_bs][_is_silent[_bs]], _bare[_bs][~_is_silent[_bs]]
+    if len(_sm) >= 5 and len(_fr) >= 5:
+        _u2, _p2 = _mwu2(_sm, _fr, alternative="two-sided")
+        print(f"  (2) openness, silent vs fired    median {np.median(_sm):.2f} vs "
+              f"{np.median(_fr):.2f}  Mann-Whitney p={_p2:.4f}")
+        _extra_report.append(f"- terrain proxy: openness silent {np.median(_sm):.2f} vs fired "
+                             f"{np.median(_fr):.2f} (p={_p2:.4f})")
+    if commis is not None and len(empty_idx) >= 20:
+        _ei = np.asarray(empty_idx)
+        _r3, _p3 = _spr2(_bare[_ei], commis)
+        _open_half = _bare[_ei] >= np.median(_bare[_ei])
+        print(f"  (3) openness vs false-alarm area on {len(_ei)} VERIFIED-HEALTHY crops   "
+              f"rho={_r3:+.3f}  p={_p3:.4f}")
+        print(f"      false-alarm area: open half {100*commis[_open_half].mean():.1f}%  vs  "
+              f"closed half {100*commis[~_open_half].mean():.1f}%")
+        _extra_report.append(f"- terrain proxy: false-alarm area open {100*commis[_open_half].mean():.1f}% "
+                             f"vs closed {100*commis[~_open_half].mean():.1f}% (rho {_r3:+.3f}, p={_p3:.4f})")
+        # The single most actionable result in the project, so it belongs in the metrics panel and
+        # not only in a text asset: it is what justifies collecting open-woodland negatives.
+        _fa_o, _fa_c = 100 * float(commis[_open_half].mean()), 100 * float(commis[~_open_half].mean())
+        exp.log_metrics({"terrain/false_alarm_open_pct": _fa_o,
+                         "terrain/false_alarm_closed_pct": _fa_c,
+                         "terrain/false_alarm_ratio": _fa_o / max(_fa_c, 1e-6),
+                         "terrain/rho_openness_vs_iou": float(_r1)})
+    print("  (3) is decisive — those crops are confirmed damage-free, so a partial label cannot\n"
+          "  explain a false alarm. If open crops fire more, the next data to collect is confirmed\n"
+          "  negatives in that one land cover, not more annotation in general.")
+except Exception as _e:
+    print(f"\n  (terrain proxy skipped: {type(_e).__name__}: {_e})")
+
 L = [f"# 30cm fine-tune report — {datetime.now():%Y-%m-%d %H:%M}",
      f"- labeled tiles: {len(ids)} | size {SIZE} | {N_FOLDS}-fold CV | {FT_EPOCHS} epochs/fold",
      f"- avg damage coverage: {pos_frac*100:.1f}% | no-damage tiles excluded from IoU mean: {n_nodmg}/{len(ids)}",
@@ -1097,6 +1329,7 @@ if not np.isnan(det_auc_free):
 if commis is not None:
     L.append(f"- no-damage commission: model predicts damage on {commis.mean()*100:.2f}% of pixels on "
              f"{len(empty_idx)} empty tile(s) (lower=better; measures rejecting a spurious ADS prior)")
+L.extend(_extra_report)
 pd.DataFrame({"id": ids, "iou_priorEcho": prior_iou, "iou_zeroshot": zs_iou,
               "iou_no_prior": results[HEAD][0], "recall_no_prior": recall,
               "precision_nonsilent": precision, "area_ratio": area_ratio,
@@ -1106,6 +1339,42 @@ pd.DataFrame({"id": ids, "iou_priorEcho": prior_iou, "iou_zeroshot": zs_iou,
              ).to_csv(OUT / "finetune30cm_metrics.csv", index=False)
 (OUT / "run_report.md").write_text("\n".join(L))
 print("\n".join(L)); print("saved figures + report to", OUT)
+
+# --- Comet: the headline numbers ---------------------------------------------------------------
+# Only numbers that would survive into a paper table. A panel with fifty entries is a panel nobody
+# reads, and everything dropped here is still in the CSV asset and the report. Deliberately NOT
+# logged: iou_median (the mean is the reported statistic), the two A/B arms separately (the delta
+# is the result), and anything that is constant across runs.
+exp.log_metrics({k: v for k, v in {
+    "headline/iou": float(np.nanmean(results[HEAD][0])),
+    "headline/iou_per_site": float(iou_by_source),
+    "headline/dice": float(np.nanmean(results[HEAD][1])),
+    "headline/recall": float(np.nanmean(recall)),
+    "headline/precision_nonsilent": float(np.nanmean(precision)),
+    "headline/silent_crops": float(_silent),
+    "headline/paint_everything_crops": float(len(_degen)),
+    "baseline/prior_echo_iou": float(np.nanmean(prior_iou)),
+    "baseline/zero_shot_iou": float(np.nanmean(zs_iou)),
+    "ab/delta_fixed_minus_tuned": float(_delta),
+    "detection/roc_auc": float(det_auc),
+    "commission/no_damage_pct": float(commis.mean() * 100) if commis is not None else None,
+}.items() if v is not None and np.isfinite(v)})   # NaN metrics are rejected by the API
+exp.log_asset(str(OUT / "run_report.md"), file_name="run_report.md")
+exp.log_asset(str(OUT / "finetune30cm_metrics.csv"), file_name="per_crop_metrics.csv")
+# The damage-size table is the one that reframes the headline (IoU climbs 20x, recall stays flat),
+# so it goes in as a table rather than being buried in the report text.
+try:
+    _cov_tbl = []
+    for _lo, _hi in zip(_edges[:-1], _edges[1:]):
+        _s = _cov_scored & (_cov >= _lo) & (_cov < _hi)
+        if _s.sum():
+            _cov_tbl.append({"label_pct_lo": _lo * 100, "label_pct_hi": _hi * 100,
+                             "n": int(_s.sum()), "iou": round(float(np.nanmean(_hd_iou[_s])), 4),
+                             "recall": round(float(np.nanmean(recall[_s])), 4),
+                             "silent_pct": round(float(100 * _is_silent[_s].mean()), 1)})
+    exp.log_table("iou_by_label_coverage.csv", tabular_data=pd.DataFrame(_cov_tbl))
+except Exception as _e:
+    print(f"  (Comet coverage table skipped: {type(_e).__name__}: {_e})")
 
 # %% [markdown]
 # ## Self-descriptive readout
@@ -1546,3 +1815,61 @@ if VEG_MASK:
     fig.suptitle("Veg-mask strips bare-ground FPs; cleanup shaves fat edges (blue=model)", fontweight="bold")
     fig.tight_layout(); fig.savefig(OUT / "veg_mask_before_after.png", dpi=110); plt.show()
     print("  saved veg_mask_before_after.png")
+
+# %% [markdown]
+# ## Upload the visuals to Comet
+#
+# Runs last so every figure exists. Uploading all ~65 sheet pages plus 2,320 crops would take longer
+# than the training and bury the four figures that matter, so this is deliberately selective:
+# a whitelist of named figures, plus a thin sample of individual crops.
+
+# %%
+if exp:
+    _up_fig, _up_img = 0, 0
+    # 1. The named figures — the ones that go in a report. Whitelist, not a glob, so a future
+    #    diagnostic cannot silently start uploading 60 pages.
+    for _fn in ["sheet_best.png", "sheet_worst.png", "sheet_paint_everything.png",
+                "sheet_negatives_worst.png", "finetune30cm_grid.png", "learning_curve.png",
+                "run_spread.png", "resolution_diagnostic.png", "veg_mask_before_after.png",
+                "finetune30cm_ablation.png"]:
+        _fp = OUT / _fn
+        if _fp.exists():
+            exp.log_image(str(_fp), name=_fn.replace(".png", ""))
+            _up_fig += 1
+
+    # 2. Individual crops, sampled every COMET_IMG_EVERY from the IoU-SORTED list. Because the list
+    #    is sorted, an even stride is an even sweep from best to worst — a fairer picture of typical
+    #    quality than any hand-picked selection, and it cannot be accused of cherry-picking.
+    if COMET_IMG_EVERY:
+        try:
+            from scipy.ndimage import binary_dilation as _bdil
+            _hi_, _, _hp_ = results[HEAD]
+            _dmg_sorted = sorted([i for i in range(len(X)) if not np.isnan(_hi_[i])],
+                                 key=lambda i: -_hi_[i])
+            _neg_all = [i for i in range(len(X)) if np.isnan(_hi_[i])]
+            _neg_all.sort(key=lambda i: -float(((_hp_[i] > thr_of(i)) & valid_mask(i)).mean()))
+
+            def _overlay(i):
+                """RGB uint8 with the prediction filled blue and the label outlined green."""
+                im = X[i][0][..., :3].astype(np.float32).copy()
+                pr = (_hp_[i] > thr_of(i)) & valid_mask(i)
+                im[pr] = 0.5 * im[pr] + 0.5 * np.array([0., 102., 255.])
+                gt = X[i][1] > .5
+                if gt.any():
+                    im[_bdil(gt, iterations=2) & ~gt] = [0., 255., 0.]
+                return im.clip(0, 255).astype(np.uint8)
+
+            for _rank, _i in enumerate(_dmg_sorted[::COMET_IMG_EVERY]):
+                exp.log_image(_overlay(_i), name=f"crop_{_rank*COMET_IMG_EVERY:04d}_"
+                                                 f"{ids[_i]}_iou{_hi_[_i]:.2f}")
+                _up_img += 1
+            for _rank, _i in enumerate(_neg_all[::max(1, COMET_IMG_EVERY // 4)]):
+                _fp_pct = 100 * float(((_hp_[_i] > thr_of(_i)) & valid_mask(_i)).mean())
+                exp.log_image(_overlay(_i), name=f"healthy_{ids[_i]}_painted{_fp_pct:04.1f}pct")
+                _up_img += 1
+        except Exception as _e:
+            print(f"  (Comet crop sampling skipped: {type(_e).__name__}: {_e})")
+
+    print(f"  Comet: uploaded {_up_fig} figure(s) and {_up_img} sampled crop(s).")
+    exp.end()
+    print("  Comet: experiment closed — open the project to view it.")

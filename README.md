@@ -38,15 +38,20 @@ model imagery at the resolution it was pretrained on**. Neither alone is enough.
 | TreeFinder model, used as-is | no | **yes** | 0.108 | — |
 | Fine-tuned, whole tiles squashed to 384 px | **yes** | no | 0.116 ± 0.027 | 0.33 |
 | **Fine-tuned, cut into 0.60 m/px crops** | **yes** | **yes** | **0.257 ± 0.020** | **0.47 ± 0.04** |
+| … same, with a training budget long enough to finish | **yes** | **yes** | **0.297 ± 0.003** | **0.51** |
 
 Fixing the resolution alone gets 0.108. Training on our labels alone gets 0.116. Doing both gets
-0.257 — more than the two gains added together.
+0.257 — more than the two gains added together. Letting training run to completion adds another 0.04
+(see [below](#the-reported-number-was-a-floor-training-was-being-cut-short)).
 
-Every row is the mean of repeated identical runs (4 for the crop row, 5 for the whole-tile row); the
-spread is run-to-run training noise, not a confidence interval. The two sets of runs do not overlap
-at all — the worst crop run beats the best whole-tile run — so a permutation test lands on its floor,
-**p = 0.008**. Scored per source site rather than per crop the number is 0.245 ± 0.021, so the result
-is not an artefact of some sites contributing more crops than others.
+Every row is the mean of repeated identical runs; the spread is run-to-run training noise, not a
+confidence interval. The crop and whole-tile runs do not overlap at all — the worst crop run beats
+the best whole-tile run — so a permutation test lands on its floor, **p = 0.008**. Scored per source
+site rather than per crop the number is 0.296, essentially unchanged, so the result is not an
+artefact of some sites contributing more crops than others.
+
+The final row rests on 2 runs rather than 4 and a third is in progress, so treat it as provisional —
+though both of its runs already beat all four of the row above.
 
 ![Best predictions](docs/figures/sheet_best.jpg)
 
@@ -78,19 +83,29 @@ The cleanest evidence needs no statistics:
 > **Zero-shot IoU rose from 0.040 to 0.108** — the *same* pretrained weights with *no* training, on
 > the *same* ground. Only the pixel scale changed.
 
+### The reported number was a floor: training was being cut short
+
+The training budget was 30 passes over the data. The best pass is *chosen* on held-out data, so a
+budget only matters if the choice is pressed against the ceiling — and it was: 2 of 5 folds picked
+the very last pass available, meaning the model was still improving when the run ended.
+
+Doubling the budget to 60 passes moved IoU from **0.257 to 0.297**, and now no fold chooses the last
+pass, so 60 is genuinely enough. Every fold improved or held. Precision rose 0.50 → 0.55, and the
+number of crops the model gives up on entirely fell from 290 to 253.
+
+This is worth stating plainly because it is a boring result that was hiding a real one: for weeks the
+score was being limited by a setting, not by the method or the data.
+
 ### What does not work yet
 
-- **Small damage is missed.** About 15% of damaged crops get no prediction at all — the model
-  outputs nothing, which scores recall 0. It has learned a large-area texture cue and cannot
-  resolve individual dead trees.
-- **False alarms on healthy ground: 7.0% ± 2.5% of pixels**, and one verified-healthy crop was 99.6%
-  painted. This is the largest remaining source of lost IoU.
-- **Training is cut short.** The best epoch is chosen on held-out data; in the latest run 2 of 5
-  folds chose the very last epoch available, meaning the model was still improving when the budget
-  ended. The reported number is therefore a floor, not a ceiling.
+- **Small damage is missed.** 253 of 1,908 damaged crops (13%) get no prediction at all — the model
+  outputs nothing, which scores recall 0. It has learned a large-area texture cue and cannot resolve
+  individual dead trees.
+- **False alarms on healthy ground: 8.4% of pixels**, and the worst verified-healthy crop was 94%
+  painted. This is the largest remaining source of lost IoU, and the section below identifies why.
 - **Labels are partial.** Annotators traced damage clusters, not every tree, so IoU is a lower bound.
 
-The failures look like two different problems but are one problem.
+The failures look like two opposite problems. They are one mistake seen from two sides.
 
 ![Missed damage](docs/figures/sheet_worst.jpg)
 
@@ -103,20 +118,44 @@ alone. The model finds the damage and then keeps going.*
 
 ![False alarms on healthy ground](docs/figures/sheet_negatives_worst.jpg)
 
-*The same failure on ground independently verified as damage-free — 191 of 412 healthy crops got some
-false damage, the worst 99.6% painted. There is no "the label was incomplete" excuse here.*
+*The same failure on ground independently verified as damage-free, worst first. Note the terrain:
+scattered dark crowns over pale soil. There is no "the label was incomplete" excuse here.*
 
-### The failures share one cause
+### The one mistake behind both failures: the model thinks bare ground means damage
 
-Compare the terrain. The successes are **closed-canopy forest**: dense green stand, damage as a
-distinct patch, a real edge to trace. Almost every failure — silent or flooded, on damage tiles or
-healthy ones — is **open, sparse, dry woodland**: scattered dark crowns over pale soil.
+A dead conifer and bare soil are nearly the same colour from above. The model has resolved that
+ambiguity in the simplest possible way — it treats pale, un-vegetated ground as damage. That single
+rule produces both failures, in opposite directions.
 
-That texture genuinely *is* damage in some places and healthy open forest in others, and the model
-cannot tell them apart. It is not noise; it is one land-cover type the training data barely covers.
-Only 60 confirmed-healthy tiles exist, and few of them are open woodland.
+To test it rather than assert it, every crop was scored for how much of it is *not* vegetation (using
+excess green, `2G − R − B`, a standard soil-versus-canopy separation) and that number was compared
+against performance:
 
-**So the next step is not more data — it is more of one specific kind of data.**
+| how open the crop is | crops | IoU | recall | model silent |
+|---|---|---|---|---|
+| most closed | 476 | 0.325 | 0.458 | 17.4% |
+| | 478 | 0.268 | 0.451 | 17.2% |
+| | 477 | 0.306 | 0.513 | 10.5% |
+| most open | 477 | 0.299 | **0.633** | **8.0%** |
+
+Read the last two columns. In open terrain the model fires **more** — recall climbs from 0.46 to 0.63
+and the share of crops it gives up on halves. In closed canopy it fires **less**. Same rule, opposite
+symptoms: over-prediction where the ground is bare, silence where the canopy is closed.
+
+The decisive test is on the 412 crops independently verified to contain **no damage at all**, where
+"the label was incomplete" cannot explain anything:
+
+> **Open crops have 15.5% of their pixels falsely painted as damage. Closed-canopy crops have 1.2%.
+> Thirteen times worse** (rho = +0.46, p < 0.0001).
+
+So the next step is not more data in general — it is **confirmed damage-free tiles in open woodland
+specifically**. Only 60 healthy tiles exist and few are that land cover. Negatives are also cheap to
+add: they need verification, not tracing.
+
+*An earlier version of this section claimed both failures happened in open woodland. That was based
+on looking at pictures, and the measurement above contradicts half of it — the silent crops are in
+**closed** canopy (openness 0.45 vs 0.52, p < 0.0001), and openness does not predict IoU at all
+(rho = −0.01, p = 0.56). The claim has been corrected rather than defended.*
 
 ### Small damage is the hard case — but IoU exaggerates how hard
 
@@ -124,22 +163,46 @@ Splitting the crops by how much of them the annotation marks as damaged:
 
 | damage in crop | crops | IoU | recall | model silent |
 |---|---|---|---|---|
-| under 0.5% | 141 | 0.020 | 0.21 | 33% |
-| 0.5 – 1% | 117 | 0.115 | 0.51 | 27% |
-| 1 – 2% | 217 | 0.147 | 0.52 | 27% |
-| 2 – 5% | 357 | 0.218 | 0.58 | 16% |
-| 5 – 10% | 306 | 0.337 | 0.57 | 13% |
-| 10 – 25% | 397 | 0.373 | 0.56 | 11% |
-| over 25% | 373 | 0.409 | 0.50 | 3% |
+| under 0.5% | 141 | 0.022 | 0.19 | 38% |
+| 0.5 – 1% | 117 | 0.122 | 0.47 | 31% |
+| 1 – 2% | 217 | 0.183 | 0.54 | 21% |
+| 2 – 5% | 357 | 0.254 | 0.59 | 12% |
+| 5 – 10% | 306 | 0.368 | 0.57 | 11% |
+| 10 – 25% | 397 | 0.393 | 0.54 | 8% |
+| over 25% | 373 | 0.415 | 0.49 | 3% |
 
-IoU climbs 20× across these rows. **Recall does not** — it is flat at roughly 0.5 everywhere above
+IoU climbs 19× across these rows. **Recall does not** — it is flat at roughly 0.5 everywhere above
 0.5%. The model finds about the same share of the damage regardless of patch size; IoU simply
 punishes a fixed boundary error far more when the target is small. Only the bottom row is a real
-failure, and it is a real one: a third of those crops get no prediction at all.
+failure, and it is a real one: nearly 40% of those crops get no prediction at all.
 
-This also settles a tempting shortcut. Scoring only crops with over 25% damage would report **0.409**
-instead of 0.257 — but recall would be unchanged, because nothing about the model improved. The
+This also settles a tempting shortcut. Scoring only crops with over 25% damage would report **0.415**
+instead of 0.299 — but recall would be unchanged, because nothing about the model improved. The
 number would rise purely by deleting the hard cases, so every crop is kept.
+
+### Could this be applied to all 48,000 survey polygons?
+
+The obvious worry is that a mean IoU of 0.30 hides a wide spread, so you would be publishing 48,000
+maps with no idea which ones to trust. The fix would be a confidence score: correct only the polygons
+the model is sure about, and leave the rest alone.
+
+That was tested, and it turned out to be unnecessary. Each crop was ranked by three confidence signals
+computable **without** a label, then scored as a system — model correction where selected, original
+ADS polygon everywhere else:
+
+| corrections emitted for … | 10% | 25% | 50% | 75% | **100%** |
+|---|---|---|---|---|---|
+| system IoU (ranked by model confidence) | 0.153 | 0.200 | 0.268 | 0.297 | **0.299** |
+
+Every column is worse than emitting corrections everywhere. **Holding back always loses**, because
+the model scores 0.299 against the survey's 0.115 — even its weakest crops are no worse than the
+polygon they would replace, and on verified-healthy ground it paints 8.4% of pixels against the ADS
+polygon's 14.4%.
+
+Confidence is still worth computing: it correlates with quality at rho = +0.62, which is a good way to
+order polygons for human review. It is just not needed as a gate. Part of that correlation is
+mechanical — larger damage patches raise both confidence and IoU — so it ranks well without meaning
+the model knows when it is wrong.
 
 Full numbers, negative results and caveats: **[RESULTS.md](RESULTS.md)**.
 
