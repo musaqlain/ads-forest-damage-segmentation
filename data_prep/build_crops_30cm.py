@@ -71,7 +71,19 @@ CROP       = 384       # px per crop => 384 * 0.60 = 230 m of ground per crop
 # crops were dropped. That blank-drop is why the count stays modest -- with FT_EPOCHS=30 a full
 # 5-fold CV is roughly 60-70 min, not the multi-hour run a naive count would suggest.
 STRIDE_FRAC_POS = 0.5
-STRIDE_FRAC_NEG = 1.0  # confirmed negatives are plentiful and easy; never worth overlapping
+# 2026-08-17 EXPERIMENT (1.0 -> 0.5). "Never worth overlapping" was wrong: negatives ended up only
+# 18% of the crops, down from 29% before cropping, and openness predicts false alarms on
+# verified-healthy ground in both logged runs. Overlapping lifts the negative count from 412 to the
+# NEG_RATIO cap of 782 using the SAME 60 tiles and no new annotation. n_negative changes, so these
+# runs cannot pool with the 412-negative ones in the stability check. Revert to 1.0 if commission
+# does not improve.
+# TESTED 2026-08-21 and REVERTED. At 0.5 the negatives went 412 -> 782 (18% -> 29% of the set,
+# the share whole-tile mode had). Commission on verified-healthy crops did NOT improve: 9.05% against
+# an 8.4-9.2% baseline, and the pre-registered bar was "under 6%". The model only got quieter --
+# silent crops 253/300 -> 599, recall 0.51 -> 0.42. Overlapping crops of the SAME 60 tiles are extra
+# VIEWS, not extra information, so they shift the class balance without teaching anything new. The
+# fix for false alarms has to be new open-woodland tiles, not more slices of the old ones.
+STRIDE_FRAC_NEG = 1.0
 
 # A crop from a DAMAGE tile containing no traced label is NOT a safe negative — labelling is partial
 # by design, so untraced damage may sit there. Dropping those is the conservative choice. Crops of a
@@ -161,12 +173,19 @@ for n, r in enumerate(meta.itertuples(index=False), 1):
 cand = pd.DataFrame(cand)
 pos, neg = cand[cand.role == "damage"], cand[cand.role == "negative"]
 want_neg = int(round(len(pos) * NEG_RATIO))
+print(f"negative candidates before sampling: {len(neg)} (quota {want_neg} = {NEG_RATIO} x {len(pos)})")
 if len(neg) > want_neg:
-    # Spread the sample across source tiles rather than taking a plain random draw, so geographic
-    # coverage of the negatives is preserved.
-    neg = (neg.sample(frac=1.0, random_state=SEED)
-              .groupby("source_id", group_keys=False).head(max(1, want_neg // max(1, neg.source_id.nunique()) + 1))
-              .head(want_neg))
+    # ROUND-ROBIN, not a fixed per-tile head(). Take the 1st crop of every source tile, then the 2nd
+    # of every tile, and so on until the quota is met. Geographic spread is preserved either way, but
+    # a fixed cap of want_neg/n_tiles UNDERSHOOTS badly when the tiles are uneven: at
+    # STRIDE_FRAC_NEG=0.5 it capped each tile at 14 and delivered 455 of the 782 requested, because
+    # most healthy tiles hold fewer than 14 crops while a handful hold far more. Round-robin lets the
+    # large tiles absorb the shortfall only after every small tile has contributed everything it has.
+    neg = neg.sample(frac=1.0, random_state=SEED)
+    neg = (neg.assign(_rr=neg.groupby("source_id").cumcount())
+              .sort_values(["_rr", "source_id"], kind="stable")
+              .head(want_neg)
+              .drop(columns="_rr"))
 keep = pd.concat([pos, neg]).sort_values(["source_id", "id"]).reset_index(drop=True)
 print(f"\nkeeping {len(keep)} crops: {len(pos)} damage + {len(neg)} negative "
       f"(from {keep.source_id.nunique()} source tiles)")
@@ -233,7 +252,13 @@ print(f"\n  SOURCE ANNOTATIONS UNMODIFIED: {untouched}")
 # ## Save one zip to Drive
 # So the crops survive a runtime restart. One large file transfers far faster than thousands of
 # small ones. To restore in a later session:
-# `!unzip -q /content/drive/MyDrive/Data/seed30cm_crops.zip -d /content/`
+# `!unzip -q -o /content/drive/MyDrive/Data/seed30cm_crops.zip -d /content/`
+#
+# ONLY in a fresh session where /content/seed30cm_crops does not exist. Running it over an
+# existing folder makes unzip stop at every file for a keypress; answering those prompts while
+# the notebook keeps going leaves a HALF-EXTRACTED folder, and finetune_30cm then silently
+# trains on whatever arrived in time. `-o` (overwrite, never ask) is what prevents that.
+# In the same session as this build, skip the unzip entirely -- the crops are already there.
 
 # %%
 if IN_COLAB and ZIP_TO is not None:

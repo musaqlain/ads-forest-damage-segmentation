@@ -130,6 +130,7 @@ Worth reporting; each one cost time and closed a direction.
 | Raising the minimum-label threshold to drop thin crops | Would lift IoU 0.299 → 0.415 while leaving recall flat — a metric artefact, not an improvement. Rejected |
 | Gating corrections on model confidence before deployment | Worse at every coverage than correcting everything (see evidence chain 7). Rejected |
 | Restricting the epoch budget to match the whole-tile recipe | Cost 0.04 IoU for two months (see evidence chain 6) |
+| Overlapping the negative crops (`STRIDE_FRAC_NEG` 1.0 -> 0.5) | **Reverted 2026-08-21.** Negatives 412 -> 782 (18% -> 29%). Commission did not improve — 9.05% against an 8.4-9.2% baseline, versus a pre-registered bar of 6% — and the model only went quieter: silent crops 253/300 -> 599, recall 0.51 -> 0.42. Extra views of the same 60 tiles are not extra information |
 
 ### Performance by damage size
 
@@ -171,10 +172,13 @@ wrong *place*, so this is a localisation problem, not a calibration one.
 4. **146 labelled tiles.** Volume is a constraint, but evidence chain 8 says *which* data, and the
    answer is not "more of the same".
 5. **Fold 2 holds 42% of the test weight** and is usually the weakest fold, which is most of the
-   run-to-run spread: across the three `-ep60` runs fold 2 scored 0.302, 0.265, 0.243 while fold 4
-   scored 0.296, 0.362, 0.309. The tile-weighted headline therefore sits below the unweighted fold mean
-   (0.2748 vs 0.2825 latest). A single fold carrying 42% of the weight is the main structural weakness
-   of the evaluation.
+   run-to-run spread: across the `-ep60` runs fold 2 scored 0.302, 0.265, 0.243 while fold 4 scored
+   0.296, 0.362, 0.309. The tile-weighted headline therefore sits below the unweighted fold mean. This
+   is the main structural weakness of the evaluation, and on 2026-08-21 it produced a headline that was
+   almost entirely one fold: fold 2 returned **0.108** while the other four averaged 0.286, dragging the
+   tile-weighted mean to 0.214 against an unweighted 0.250. The collapse detector missed it by 0.002
+   (it fires below 0.4x the median, i.e. 0.106). Any run where fold 2 lands far below the others should
+   be re-run before it is compared with anything.
 6. **Detection is only fair and unstable.** ROC-AUC 0.754 then 0.703 across two runs, PR-AUC 0.895 then
    0.881 against a 0.822 random baseline — the model localises better than it decides whether a crop is
    damaged at all, and this metric swings more between runs than IoU does.

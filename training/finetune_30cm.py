@@ -158,9 +158,28 @@ if USE_CROPS and not (DATA / "images").exists():
     if not _zip.exists():
         raise SystemExit(f"USE_CROPS=True but neither {DATA}/images nor {_zip} exists.\n"
                          f"Run data_prep/build_crops_30cm.py first — it writes that zip.")
-    print(f"unpacking {_zip} -> {DATA.parent} ...", flush=True)
-    shutil.unpack_archive(str(_zip), str(DATA.parent))
-    print(f"  restored {len(list((DATA/'images').glob('*.png')))} crop images", flush=True)
+    # 2026-08-21: unpacking STRAIGHT off the Drive mount lost 340 of 2690 crops, twice, silently.
+    # The mount is a network filesystem and a zip reader seeks around inside the archive rather than
+    # streaming it, so a 900 MB zip is thousands of small random reads and any of them can come back
+    # short. Copying it locally first makes that one sequential read, which the mount handles fine.
+    # The folder is wiped first because unpacking over a partial extraction is exactly how the count
+    # silently ends up wrong, and the result is counted against the manifest before training starts.
+    _local = Path("/content/_crops_transfer.zip")
+    print(f"copying {_zip.name} ({_zip.stat().st_size/1e6:.0f} MB) to local disk ...", flush=True)
+    shutil.copyfile(_zip, _local)
+    if _local.stat().st_size != _zip.stat().st_size:
+        raise SystemExit("the copy off Drive came back short — re-run this cell.")
+    if DATA.exists():
+        shutil.rmtree(DATA)
+    print(f"unpacking -> {DATA.parent} ...", flush=True)
+    shutil.unpack_archive(str(_local), str(DATA.parent))
+    _local.unlink()
+    _n_img = len(list((DATA / "images").glob("*.png")))
+    _n_man = len(pd.read_csv(DATA / "manifest.csv")) if (DATA / "manifest.csv").exists() else _n_img
+    print(f"  restored {_n_img} crop images (manifest lists {_n_man})", flush=True)
+    if _n_img < _n_man:
+        raise SystemExit(f"ABORTING: unpacked {_n_img} images but the manifest lists {_n_man}. "
+                         "Re-run this cell; if it repeats, rebuild the zip.")
 SSL_WEIGHTS = Path("/content/drive/MyDrive/Data/ssl_outputs/ssl_pretrained.pt")
 # Init priority in build_model: SSL (4ch native) -> TreeFinder (60cm, ~3773 labels) -> ImageNet.
 # An ABSENT file falls back silently to ImageNet, so check the "init from ..." line in the log.
