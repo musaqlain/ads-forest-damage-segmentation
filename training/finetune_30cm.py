@@ -257,8 +257,27 @@ if MANIFEST.exists():
     man = pd.read_csv(MANIFEST); man["id"] = man["id"].astype(str).str.zfill(4)
     used = man[man["use"] == True]
     ids = [i for i in used["id"].tolist() if (IMG_DIR / f"{i}.png").exists()]
-    print(f"manifest.csv: training on {len(ids)} curated tiles "
-          f"(damage {int((used.role=='damage').sum())}, negative {int((used.role=='negative').sum())})")
+    # Report what is ACTUALLY on disk, not what the manifest asked for, and refuse to train on a
+    # partial crop directory. 2026-08-21: this line printed the manifest role counts beside the
+    # on-disk total, so a truncated crop set read as "2350 curated tiles (damage 1908, negative
+    # 782)" -- three numbers that cannot all be true. 340 crops and 25 whole SOURCE tiles were
+    # absent, the spatial folds were rebuilt around the survivors, and the run reported an IoU that
+    # looked comparable with previous runs and was not. Silently training on whatever survived cost
+    # 2.5 hours and produced a wrong conclusion; aborting here costs a second.
+    _kept = used[used["id"].isin(set(ids))]
+    _missing = len(used) - len(ids)
+    print(f"manifest.csv: training on {len(ids)} crops PRESENT ON DISK "
+          f"(damage {int((_kept.role=='damage').sum())}, negative {int((_kept.role=='negative').sum())})")
+    if _missing:
+        print(f"  !! {_missing} of {len(used)} manifest rows have NO image file "
+              f"({100*_missing/max(len(used),1):.1f}% of the dataset).")
+        if _missing > 0.02 * len(used):
+            raise SystemExit(
+                f"ABORTING: {_missing} crops listed in manifest.csv are missing from {IMG_DIR}."
+                "\n  The CV folds are built from whatever survives, so the resulting IoU is NOT"
+                "\n  comparable with any other run, and the cause would be invisible in the report."
+                "\n  Usual causes: an interrupted build, a truncated unzip, or a stale zip on Drive."
+                "\n  Fix: re-run build_crops_30cm, let the zip step finish, then retry.")
 else:
     ids = sorted(p.stem for p in MASK_DIR.glob("*.png"))
     print(f"no manifest.csv -> using all {len(ids)} masks")
